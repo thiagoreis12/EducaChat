@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+      "composio": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote@latest",
+          "https://connect.composio.dev/mcp"
+        ]
+      }
+    }
+  }

@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node / Vue
+node_modules/
+dist/
+.output/
+*.local
+
+# Chroma / dados locais
+data/chroma/
+*.bin
+
+# OS / IDE
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Cursor (manter mcp.json do projeto)
+.cursor/*
+!.cursor/mcp.json
