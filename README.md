@@ -57,7 +57,15 @@ uv python uninstall 3.11
 uv python install 3.11
 ```
 
-Coloque o PDF oficial da BNCC em `api/data/bncc.pdf` quando for fazer a ingestão (etapa 2). Esse arquivo não vai para o Git.
+Coloque o PDF oficial da BNCC em `api/data/bncc.pdf` (não vai para o Git). Ingestão — um chunk por código `EF06MA01`:
+
+```powershell
+cd api
+uv sync
+uv run python -m app.ingest_bncc
+```
+
+A primeira execução baixa o modelo `paraphrase-multilingual-MiniLM-L12-v2` (o default do Chroma é em inglês e não serve para pt-BR). O script imprime a contagem por série/componente e roda 3 consultas com filtro.
 
 ## Setup do front
 
