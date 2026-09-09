@@ -19,6 +19,8 @@ dist/
 
 # Chroma / dados locais
 data/chroma/
+api/data/chroma/
+api/data/bncc.pdf
 *.bin
 
 # OS / IDE
