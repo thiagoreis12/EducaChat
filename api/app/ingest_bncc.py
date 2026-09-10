@@ -10,7 +10,13 @@ from app.bncc import (
     contar_por_serie,
     extrair_habilidades,
 )
-from app.chroma_store import collection, consultar
+from app.chroma_store import (
+    ativar_staging,
+    bloqueio_ingestao,
+    consultar,
+    preparar_staging,
+    validar_ids,
+)
 
 RAIZ = Path(__file__).resolve().parent.parent
 PDF = RAIZ / "data" / "bncc.pdf"
@@ -29,22 +35,28 @@ def _imprimir_contagens(habilidades) -> None:
 
 
 def _gravar(habilidades) -> None:
-    col = collection(RAIZ, reset=True)
-    for inicio in range(0, len(habilidades), LOTE):
-        lote = habilidades[inicio : inicio + LOTE]
-        col.add(
-            ids=[h.codigo for h in lote],
-            documents=[h.texto for h in lote],
-            metadatas=[
-                {
-                    "codigo": h.codigo,
-                    "serie": h.serie,
-                    "componente": h.componente,
-                }
-                for h in lote
-            ],
-        )
-        print(f"  gravados {min(inicio + LOTE, len(habilidades))}/{len(habilidades)}")
+    # Blue-green com lock: um processo só, e o nome do slot é o capturado
+    # em preparar_staging — não o recalculado depois pelo ponteiro.
+    with bloqueio_ingestao(RAIZ):
+        col, nome_staging = preparar_staging(RAIZ)
+        for inicio in range(0, len(habilidades), LOTE):
+            lote = habilidades[inicio : inicio + LOTE]
+            ids = [h.codigo for h in lote]
+            col.add(
+                ids=ids,
+                documents=[h.texto for h in lote],
+                metadatas=[
+                    {
+                        "codigo": h.codigo,
+                        "serie": h.serie,
+                        "componente": h.componente,
+                    }
+                    for h in lote
+                ],
+            )
+            validar_ids(col, ids)
+            print(f"  gravados {min(inicio + LOTE, len(habilidades))}/{len(habilidades)}")
+        ativar_staging(RAIZ, nome=nome_staging, esperado=len(habilidades))
 
 
 def _mostrar_consulta(titulo: str, pergunta: str, serie: int, componente: str) -> None:

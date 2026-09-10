@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +14,9 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 from app.bncc import series_do_aluno
 
 COLLECTION = "bncc_habilidades"
+STAGING_COLLECTION = "bncc_habilidades_staging"
 MODELO_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
+PONTEIRO = "colecao_ativa.txt"
 
 
 def embedding_pt_br() -> SentenceTransformerEmbeddingFunction:
@@ -32,15 +37,113 @@ def cliente(raiz_api: Path | None = None) -> chromadb.PersistentClient:
     return chromadb.PersistentClient(path=str(path))
 
 
-def collection(raiz_api: Path | None = None, *, reset: bool = False):
-    db = cliente(raiz_api)
-    if reset and COLLECTION in {c.name for c in db.list_collections()}:
-        db.delete_collection(COLLECTION)
+def _arquivo_ponteiro(raiz_api: Path | None = None) -> Path:
+    return caminho_persistencia(raiz_api) / PONTEIRO
+
+
+def nome_colecao_ativa(raiz_api: Path | None = None) -> str:
+    caminho = _arquivo_ponteiro(raiz_api)
+    if caminho.is_file():
+        nome = caminho.read_text(encoding="utf-8").strip()
+        if nome in {COLLECTION, STAGING_COLLECTION}:
+            return nome
+    return COLLECTION
+
+
+def _nomes(db: chromadb.PersistentClient) -> set[str]:
+    return {c.name for c in db.list_collections()}
+
+
+def _abrir_colecao(db: chromadb.PersistentClient, nome: str):
     return db.get_or_create_collection(
-        name=COLLECTION,
+        name=nome,
         embedding_function=embedding_pt_br(),
         metadata={"hnsw:space": "cosine"},
     )
+
+
+def collection(raiz_api: Path | None = None):
+    return _abrir_colecao(cliente(raiz_api), nome_colecao_ativa(raiz_api))
+
+
+def nome_colecao_staging(raiz_api: Path | None = None) -> str:
+    ativo = nome_colecao_ativa(raiz_api)
+    return STAGING_COLLECTION if ativo == COLLECTION else COLLECTION
+
+
+@contextmanager
+def bloqueio_ingestao(raiz_api: Path | None = None) -> Iterator[None]:
+    """Lock exclusivo no disco (fcntl/msvcrt). Cobre preparar → gravar → validar → ativar."""
+    caminho = caminho_persistencia(raiz_api) / "ingest.lock"
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(caminho, "a+b")
+    try:
+        if fh.seek(0, 2) == 0:
+            fh.write(b"0")
+            fh.flush()
+        fh.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fh.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+
+def preparar_staging(raiz_api: Path | None = None) -> tuple[Any, str]:
+    """Recria só o slot inativo. Devolve a coleção e o nome capturado."""
+    db = cliente(raiz_api)
+    nome = nome_colecao_staging(raiz_api)
+    if nome in _nomes(db):
+        db.delete_collection(nome)
+    return _abrir_colecao(db, nome), nome
+
+
+def validar_ids(col, ids: list[str]) -> None:
+    obtido = set(col.get(ids=ids)["ids"])
+    faltando = set(ids) - obtido
+    if faltando:
+        raise RuntimeError(
+            "Lote incompleto no staging: " + ", ".join(sorted(faltando))
+        )
+
+
+def ativar_staging(
+    raiz_api: Path | None = None,
+    *,
+    nome: str,
+    esperado: int,
+) -> None:
+    """Ativa o nome capturado em preparar_staging — não recalcula pelo ponteiro."""
+    if nome not in {COLLECTION, STAGING_COLLECTION}:
+        raise ValueError(f"Nome de coleção inválido: {nome}")
+    db = cliente(raiz_api)
+    if nome not in _nomes(db):
+        raise RuntimeError(f"Staging {nome} não existe; a coleção ativa não foi alterada.")
+    col = _abrir_colecao(db, nome)
+    gravados = col.count()
+    if gravados != esperado:
+        raise RuntimeError(
+            f"Staging incompleto ({gravados} != {esperado}); "
+            "a coleção ativa não foi alterada."
+        )
+    caminho = _arquivo_ponteiro(raiz_api)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    caminho.write_text(nome, encoding="utf-8")
 
 
 def consultar(
