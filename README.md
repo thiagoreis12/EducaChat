@@ -22,6 +22,7 @@ Não usamos Pinia. Estado fica no próprio componente (como campos de um control
 
 - `api/` — FastAPI
 - `web/` — Vue
+- `marcus/` — pipeline BNCC, avaliação (baseline × protótipo) e API do Marcus, trazidos de [MarcusSant0s/educachat](https://github.com/MarcusSant0s/educachat). Setup e fases no [README próprio](marcus/README.md)
 - `Artigo/` — entregas do artigo extensionista
 - `resumos/` — recortes de decisão
 
