@@ -19,9 +19,6 @@ dist/
 
 # Chroma / dados locais
 data/chroma/
-api/data/chroma/
-api/data/*.pdf
-!api/data/.gitkeep
 *.bin
 
 # OS / IDE

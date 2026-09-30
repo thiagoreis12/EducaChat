@@ -11,28 +11,25 @@ Roda só na sua máquina. Não há deploy.
 | Camada | Tecnologia |
 |---|---|
 | Front | Vue 3 (`<script setup>`) + Vite + Tailwind — pasta `web/` |
-| Back | Python 3.11 + uv + FastAPI — pasta `api/` |
-| Usuários / série | Supabase (auth + `profiles`; a série nunca vem do body) |
-| Material da série | ChromaDB local (`PersistentClient`) + embeddings em pt-BR |
-| IA | OpenRouter, modelo `:free`, atrás de uma interface trocável |
+| Back | Python 3.12 + uv + FastAPI — pasta `api/` (código do Marcus) |
+| Usuários / série | Supabase (auth + tabela `perfis`; a série nunca vem do body) |
+| Material da série | ChromaDB local (`PersistentClient`) + embedding `intfloat/multilingual-e5-base` |
+| IA | OpenRouter, modelo `:free`, com retry e backoff |
 
 Não usamos Pinia. Estado fica no próprio componente (como campos de um controller, sem um store global).
 
 ## Pastas
 
-- `api/` — FastAPI
+- `api/` — back-end do Marcus, trazido de [MarcusSant0s/educachat](https://github.com/MarcusSant0s/educachat): parser da BNCC, ingestão no Chroma, geração (baseline × protótipo), avaliação e API FastAPI. Fases, decisões e comandos no [README do back-end](api/README.md) e em [`api/docs/decisoes.md`](api/docs/decisoes.md)
 - `web/` — Vue
-- `marcus/` — pipeline BNCC, avaliação (baseline × protótipo) e API do Marcus, trazidos de [MarcusSant0s/educachat](https://github.com/MarcusSant0s/educachat). Setup e fases no [README próprio](marcus/README.md)
 - `Artigo/` — entregas do artigo extensionista
 - `resumos/` — recortes de decisão
 
 ## Pré-requisitos
 
-- [uv](https://docs.astral.sh/uv/) (já instala e isola o Python 3.11 do projeto)
+- [uv](https://docs.astral.sh/uv/) (instala e isola o Python do projeto)
 - Node.js 20+ e npm
 - Duas janelas de terminal (API e front sobem separados)
-
-O `uv` baixa o Python 3.11 sozinho, mesmo se o `python` do sistema for 3.12. É o equivalente a ter um JDK 17 no `pom.xml` enquanto o Java padrão da máquina é outro.
 
 ## Setup da API
 
@@ -40,33 +37,17 @@ O `uv` baixa o Python 3.11 sozinho, mesmo se o `python` do sistema for 3.12. É 
 cd api
 copy .env.example .env
 uv sync
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+uv run python -m educachat.parsing.cli
+uv run python -m educachat.ingestion.cli --recriar
+uv run uvicorn educachat.api.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 - `uv sync` lê o `pyproject.toml`, cria `.venv` e instala o que está no `uv.lock`. Pense no `pom.xml` + o repositório Maven local.
-- `--reload` recarrega o processo quando um `.py` muda (parecido com o DevTools do Spring Boot).
-- A porta é **8001**: neste Windows a 8000 já responde um nginx/Laravel, e o EducaChat não pode dividir porta com outro sistema.
-- Docs interativas: http://127.0.0.1:8001/docs
+- `parsing.cli` extrai as habilidades do PDF da BNCC (já versionado em `api/data/raw/`). `ingestion.cli --recriar` grava as 730 habilidades do 6º ao 9º ano no Chroma (`api/data/chroma/`, fora do Git).
+- A API só sobe com `SUPABASE_URL` e `SUPABASE_ANON_KEY` no `.env`. O `/chat` também precisa de `OPENROUTER_API_KEY`. Não invente valor: preencha com os dados do seu projeto.
+- A porta é **8001**: neste Windows a 8000 já responde um nginx/Laravel.
 - Checagem: http://127.0.0.1:8001/health → `{"status":"ok"}`
-
-O arquivo `.env` fica vazio nesta etapa. Chaves do Supabase e do OpenRouter entram depois — não invente valor. Se ainda não tiver o projeto no Supabase, pare e avise antes da etapa 3.
-
-Se o `uv sync` falhar com `No module named 'encodings'`, a cópia do Python 3.11 do uv está incompleta. Corrija com:
-
-```powershell
-uv python uninstall 3.11
-uv python install 3.11
-```
-
-Coloque o PDF oficial da BNCC em `api/data/bncc.pdf` (não vai para o Git). Ingestão — um chunk por código `EF06MA01`:
-
-```powershell
-cd api
-uv sync
-uv run python -m app.ingest_bncc
-```
-
-A primeira execução baixa o modelo `paraphrase-multilingual-MiniLM-L12-v2` (o default do Chroma é em inglês e não serve para pt-BR). O script imprime a contagem por série/componente e roda 3 consultas com filtro.
+- Testes: `uv run pytest -m "not integracao"` (os de integração exigem a base Chroma gerada).
 
 ## Setup do front
 
@@ -81,17 +62,16 @@ npm run dev
 
 Abre em http://localhost:5173. A tela inicial consulta `VITE_API_URL/health` (padrão `http://127.0.0.1:8001`). Variáveis `VITE_*` são as únicas que o Vite expõe ao browser — o restante ficaria só no Node, como um `application.properties` que não pode vazar para o cliente.
 
-## Ordem de construção
+## Regras de domínio e estado atual
 
-1. Scaffold (esta etapa) — as duas pastas sobem
-2. Ingestão da BNCC (um chunk por habilidade `EF<ano><COMPONENTE><nn>`)
-3. Schema Supabase (`profiles` + RLS) e validação do JWT no FastAPI
-4. Endpoint de chat com os modos `duvida`, `trabalho` e `exercicio`
-5. Telas de login/cadastro (com série) e chat (com seletor de modo)
+1. A série nunca vem do corpo da requisição. A API lê do perfil autenticado (tabela `perfis`); campo extra no body do `/chat` é rejeitado com 422.
+2. O Chroma filtra pelo intervalo de anos da habilidade (`ano_inicial <= ano <= ano_final`), sem restringir componente (decisão D17 do back-end).
+3. Os três modos (`duvida`, `trabalho`, `exercicio`) ainda não existem na API: hoje o `/chat` aceita só o modo `prototipo`.
+4. Pedido de resposta pronta ou de conteúdo de outra série é recusado e redirecionado pelo prompt de sistema.
 
-## Regras de domínio (já valem para o código seguinte)
+## Atualizar com o repositório do Marcus
 
-1. A série nunca vem do corpo da requisição. O back resolve pelo JWT do Supabase, na tabela `profiles`.
-2. Toda consulta ao ChromaDB filtra por série e componente. Sem filtro, não consulta.
-3. Três modos, cada um com system prompt próprio: `duvida`, `trabalho`, `exercicio`.
-4. Pedido de resposta pronta ou de conteúdo de outra série é recusado e redirecionado.
+```powershell
+git fetch marcus
+git merge -X subtree=api marcus/master
+```
