@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.env
+logs/
+data/processed/*
+!data/processed/.gitkeep
+data/chroma/
+test_suite/cache/
+frontend/node_modules/
+frontend/dist/
