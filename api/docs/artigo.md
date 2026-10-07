@@ -119,7 +119,28 @@ Descrição de método (decisões D20–D21; ⚠️ confira se as definições b
   - latência total, de recuperação e do LLM.
 - **Denominadores:** excluem respostas com erro de execução, que são reportadas à parte.
 
-## 8. Limitações a declarar
+## 8. Segurança da série na API (Resolução de segurança)
+
+Descrição (decisões D23–D26):
+- **A série nunca vem do cliente.** Ela está no perfil do aluno, numa tabela protegida por *Row Level Security* no PostgreSQL do Supabase. O perfil é criado por trigger no cadastro e não pode ser alterado pelo próprio aluno.
+- **Como o `/chat` obtém a série:** a API identifica o usuário pelo JWT emitido pelo Supabase Auth (assinatura, expiração, audiência e emissor verificados) e lê a série do perfil usando o token do próprio aluno, de modo que o RLS também restringe a API.
+- **Payload restrito:** o endpoint de conversa aceita apenas a pergunta; qualquer campo adicional (como `ano` ou `serie`) é rejeitado.
+- **Middleware:** a autenticação nega acesso por padrão a toda rota não declarada como pública.
+- **Tokens:** o access token é mantido apenas em memória no navegador, e o refresh token em cookie `HttpOnly` e `SameSite=Strict`, inacessível a scripts. Isso reduz o impacto de ataques XSS em relação ao armazenamento em `localStorage`, padrão do SDK do Supabase, ao custo de uma chamada de renovação a cada carregamento da página.
+- **Verificação:** 57 testes automatizados cobrem tokens ausentes, adulterados, expirados, de outra audiência, de outro emissor e sem assinatura (`alg: none`), além de payloads com campos de série, tentativa de troca de série e exposição do baseline. ⏳ O mesmo roteiro contra o Supabase real está em `scripts/verificar_seguranca.sh`; registrar aqui o resultado ao rodar.
+
+## 9. Interface e avaliação de usabilidade
+
+- **Interface:** aplicação web em Vue 3, com cadastro (e-mail, senha e série), login e chat.
+- **Sessão:**
+  - o access token é mantido só em memória;
+  - a sessão é renovada por cookie HttpOnly, sem expor o refresh token ao JavaScript;
+  - ao recarregar a página, a sessão é recuperada sem novo login.
+- **Resposta:** o chat mostra, junto de cada resposta, as habilidades da BNCC consultadas (código, componente e série), o que torna a ancoragem curricular visível para o aluno.
+- **Espera:** como a recuperação e a geração acrescentam latência, a interface exibe um indicador com a etapa em curso e o tempo decorrido.
+- **SUS:** a avaliação SUS passa a ser aplicada sobre o produto integrado (interface + API), e não sobre a interface de testes da API. ⏳ Registrar aqui a aplicação e os resultados.
+
+## 10. Limitações a declarar
 
 - **Proxy de recuperação:** o proxy da comparação de embeddings é derivado da própria estrutura da BNCC (objeto → habilidades). Ele serve para comparar modelos entre si, não para medir a qualidade final do sistema.
 - **Naturalidade das perguntas:** perguntas por template são menos naturais que perguntas reais de alunos. A estratégia com LLM está implementada e pode ser usada para comparação.

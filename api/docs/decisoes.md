@@ -256,6 +256,119 @@ Status: ✅ vigente · ⏳ pendente · ♻️ substituída
 - **Segurança da série:** as 151 consultas contra a base real, sem nenhum vazamento.
 - **Marcador `integracao`:** usa a base real e o modelo; é pulado se a base não existir.
 
-## Pendentes
+---
 
-Nenhuma no momento.
+## Fase 5.5: API
+
+### D23 ✅ Autenticação delegada ao Supabase Auth
+- `POST /auth/cadastro`, `/auth/login`, `/auth/refresh` e `/auth/logout` repassam ao Supabase Auth (GoTrue) via HTTP. **A API nunca vê nem guarda hash de senha.**
+- **JWT:** validado com PyJWT, conferindo:
+  - assinatura (HS256 com `SUPABASE_JWT_SECRET`, ou ES256/RS256 via JWKS do projeto se o secret não for informado);
+  - `exp`, `aud = authenticated`, `iss = {SUPABASE_URL}/auth/v1` e `role = authenticated`;
+  - tokens com `alg: none` são rejeitados.
+- **Middleware que nega por padrão:** toda rota fora de uma lista pública (`/health`, rotas de auth, `/docs`) exige Bearer válido, **inclusive rotas que ainda não existem**. Uma rota nova já nasce protegida.
+- **Onde:** `src/educachat/api/seguranca.py`, `src/educachat/api/supabase.py`.
+
+### D24 ✅ A série vem só do perfil no banco
+- **Tabela `public.perfis(user_id, ano)`**, com RLS (`supabase/migrations/0001_perfis.sql`):
+  - o aluno lê e cria apenas a própria linha;
+  - **não há policy de UPDATE/DELETE**, então o aluno não troca a própria série.
+- **Criação do perfil:**
+  - no cadastro, a série vai em `user_metadata.ano` e um **trigger** em `auth.users` cria o perfil na mesma transação; isso funciona até com confirmação de e-mail ativa;
+  - `POST /perfil` cria o perfil só se ele ainda não existir (409 caso contrário), e o `user_id` vem do token.
+- **Por que não ler a série do token:** `user_metadata` é editável pelo próprio usuário no Supabase. Por isso a API **nunca** lê a série do token; lê de `perfis`, que só o trigger ou o primeiro `POST /perfil` escrevem.
+- **Consulta ao perfil com o token do aluno:** a API consulta `perfis` via PostgREST com o token do próprio aluno, não com uma chave de serviço. O RLS vale também para a API, e nem um bug na API permite ler o perfil de outro aluno.
+- **`POST /chat`:** aceita exatamente `{pergunta, modo}` (`extra="forbid"`). Enviar `ano`, `serie`, `user_id`, `filtro` ou `modo: "baseline"` devolve **422** sem chamar o LLM.
+- **Rota do baseline:** `/interno/baseline` só existe com `EXPOR_ROTA_BASELINE=true` (padrão false) e também exige autenticação. O harness chama as funções direto, sem HTTP.
+- **Critério de pronto:**
+  - `tests/test_api.py`: 57 testes, com JWT real e Supabase simulado;
+  - `scripts/verificar_seguranca.sh`: o mesmo roteiro via curl contra o Supabase real. ⏳ Rodar depois de configurar o projeto.
+
+### D25 ✅ Tokens: access em memória, refresh em cookie HttpOnly
+- **Access token** (curto, ~1 h):
+  - vai no corpo da resposta de login;
+  - o front o guarda **só em memória** (Pinia, sem persistência).
+- **Refresh token:**
+  - fica **só** num cookie `HttpOnly`, `SameSite=Strict`, `Path=/auth`, definido pela API;
+  - nunca aparece no corpo da resposta;
+  - a cada `POST /auth/refresh`, o Supabase rotaciona o refresh token e o cookie é regravado;
+  - um refresh inválido apaga o cookie.
+- **Trade-off:**
+  - *localStorage:* qualquer script injetado (XSS) lê o token e o leva embora; o Supabase JS SDK usa esse padrão por default.
+  - *Cookie HttpOnly:* o JavaScript não consegue ler o refresh token. Um XSS ainda poderia usar o access token enquanto a página está aberta, mas não consegue exfiltrar uma sessão de longa duração.
+  - *Custo:* ao recarregar a página, o front chama `/auth/refresh` para recuperar o access token.
+- **CSRF no `/auth/refresh`:**
+  - `SameSite=Strict` impede o envio do cookie a partir de outro site;
+  - a resposta (o access token) só é legível pela origem permitida no CORS.
+- **Em produção com domínios diferentes:** `COOKIE_SAMESITE=none` + `COOKIE_SECURE=true`.
+- **Bug encontrado nos testes e corrigido:** com `HTTPException`, o FastAPI descartava o `delete_cookie` no refresh inválido e o cookie ficava no navegador.
+
+### D26 ✅ CORS explícito
+- `CORS_ORIGINS` (padrão `http://localhost:5173`, o Vite dev server), `allow_credentials=True` (necessário para o cookie) e apenas os métodos e cabeçalhos usados.
+- O middleware de CORS envolve o de autenticação. Assim o preflight `OPTIONS` passa, e até as respostas 401 levam os cabeçalhos CORS (senão o front veria "erro de rede" em vez de "não autorizado").
+
+---
+
+## Fase 9: front-end
+
+### D27 ✅ Stack e versões do front
+- **Stack:**
+  - Vue 3 + Vite + TypeScript (strict) + Pinia + vue-router + Tailwind 4 (plugin do Vite);
+  - sem framework de UI pesado.
+- **Testes:** Vitest + happy-dom.
+- **Versões presas à compatibilidade com o Node da máquina de desenvolvimento (22.11):**
+  - Vite 6.4, `@vitejs/plugin-vue` 5.2 e vue-router 4.6. Vite 7/8 e vue-router 5 exigem Node ≥ 22.12 (com o Vite 8, o binário do rolldown falhou ao carregar);
+  - TypeScript 5.9, porque o `vue-tsc` usa a API JavaScript do compilador, e o TypeScript 7 (reescrito em Go) é arriscado com ela;
+  - happy-dom em vez de jsdom, porque o jsdom 27 exige Node ≥ 22.12.
+- **Para atualizar:** com Node ≥ 22.12, dá para migrar para Vite 8 e vue-router 5 sem mudar o código. O uso do router é o mesmo.
+- **Estrutura:**
+  - `views/` (Login, Cadastro, Chat);
+  - `stores/` (auth, chat);
+  - `services/api.ts`, o único ponto que faz HTTP;
+  - `router/index.ts`, com a guarda de rota.
+
+### D28 ✅ Sessão no front: memória + cookie, sem SDK do Supabase no navegador
+- **Access token:** vive só no store Pinia, que não é persistido. Nada vai para `localStorage`, `sessionStorage` ou cookie legível; há teste verificando isso.
+- **Refresh:** via `POST /auth/refresh` da nossa API, com o cookie HttpOnly (D25).
+  - **Desvio do plano:** o plano sugeria "refresh via Supabase SDK". O `supabase-js` guarda a sessão em `localStorage` por padrão e exigiria a anon key e o acesso direto ao Supabase no front.
+  - Delegando à API, o navegador fala só com a API, e o refresh token nunca fica acessível ao JavaScript.
+- **Renovação:**
+  - automática em um 401: renova uma vez e repete a chamada;
+  - renovações concorrentes compartilham uma única chamada (o Supabase rotaciona o refresh token, e duas renovações paralelas invalidariam uma à outra).
+- **Guarda de rota:**
+  - `/chat` exige sessão; sem sessão, redireciona para `/login?redirect=/chat`;
+  - na primeira navegação, tenta recuperar a sessão pelo cookie (recarregar a página não desloga);
+  - `?redirect=` aceita só caminhos internos, sem redirecionamento para outro site.
+- **Série:** o front **nunca envia a série** no `/chat`, só a pergunta; há teste verificando isso. A série é escolhida só no cadastro (ou uma vez, se o perfil estiver vazio) e o aluno é avisado de que ela não pode ser alterada.
+- **`VITE_API_BASE_URL`:** vem de `.env.development` / `.env.production`, nunca hardcoded; o app falha na inicialização se ela estiver vazia.
+
+### D29 ✅ Estado de carregamento explícito no chat
+- **Contexto:** o protótipo tem latência extra, entre a busca na BNCC e o LLM gratuito, que pode levar dezenas de segundos.
+- **Indicador:**
+  - mostra a etapa ("Buscando habilidades da BNCC do Xº ano…" → "Escrevendo a resposta…" → aviso após 20 s) e os segundos decorridos;
+  - usa `aria-live`, para leitores de tela;
+  - o campo e o botão ficam desabilitados enquanto espera.
+- **Resposta:** traz as habilidades da BNCC consultadas (código, componente, série, expansível para ver o texto) e o tempo total. É a "resposta ancorada em habilidade aparecendo na tela" do critério de pronto.
+- **Erros com mensagem própria:**
+  - 503: assistente ocupado;
+  - 409: perfil incompleto;
+  - 401: sessão expirada, volta ao login;
+  - falha de rede.
+
+---
+
+## Fase 10: integração local
+
+### D30 ✅ Back + front juntos, com CORS e cookie funcionando
+- **CORS:** a API libera só `http://localhost:5173` (`CORS_ORIGINS`), com credenciais (D26).
+- **Mesmo host nos dois:** API em `http://localhost:8000` e front em `http://localhost:5173`. Com `SameSite=Strict`, o navegador trata `localhost` e `127.0.0.1` como sites diferentes, e o cookie de refresh não seria enviado se os hosts fossem misturados. O `.env.example` do front e o `scripts/dev.sh` já usam `localhost`.
+- **`scripts/dev.sh`:** sobe os dois processos e encerra ambos com Ctrl+C.
+- **SUS:** com a integração, a avaliação SUS pode ser aplicada sobre o produto real (front + API), e não sobre a interface de testes da API. Isso resolve a limitação registrada na seção 3.1.
+- ⏳ **Critério de pronto manual** (depende de Supabase + OpenRouter configurados): cadastro com série → login → pergunta no chat → resposta com habilidades na tela; recarregar a página sem perder a sessão; sair.
+
+## Pendentes (dependem do autor)
+
+- ⏳ **Chaves e Supabase:** criar `.env` com `OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET`, e aplicar `supabase/migrations/0001_perfis.sql`.
+- ⏳ **Conferência da amostra da Fase 1** (D06): registrar o resultado.
+- ⏳ **Métricas** (D21): conferir as definições contra as do artigo.
+- ⏳ **Execuções reais:** harness (Fase 6), `scripts/verificar_seguranca.sh` (Fase 5.5) e o fluxo manual da Fase 10.

@@ -21,7 +21,18 @@ Assistente pedagógico ancorado na BNCC. Usa RAG com filtro de metadados por sé
 | 6: harness | ✅ código / ⏳ execução real | resumível, testado com LLM simulado; falta `OPENROUTER_API_KEY` |
 | 7: métricas | ✅ | Quadro 1 testado com dados sintéticos; ⚠️ conferir definições com o artigo (D21) |
 | 8: testes | ✅ | escritos junto de cada fase (D22) |
-| 5.5, 9, 10 | ⏳ | — |
+| 5.5: API | ✅ código / ⏳ Supabase real | 57 testes de segurança (JWT real, Supabase simulado); falta aplicar o SQL e rodar `scripts/verificar_seguranca.sh` |
+| 9: front-end | ✅ | Vue 3 + Pinia + Tailwind; 18 testes (Vitest), `vue-tsc` e build OK |
+| 10: integração | ✅ código / ⏳ fluxo manual | CORS + cookie configurados, `scripts/dev.sh`; falta o teste manual com Supabase + OpenRouter reais |
+
+### O que só você pode fazer
+
+1. Criar o `.env` (a partir de `.env.example`) com `OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET`.
+2. No Supabase, rodar `supabase/migrations/0001_perfis.sql` no SQL Editor.
+3. Rodar `./scripts/dev.sh` e fazer o fluxo manual: cadastro com série → login → pergunta → resposta com habilidades → recarregar a página → sair.
+4. Rodar `scripts/verificar_seguranca.sh` com um aluno do 6º ano.
+5. Rodar o harness (Fase 6) e as métricas (Fase 7).
+6. Conferir as definições das métricas contra as do artigo (D21) e registrar a conferência da amostra da Fase 1 (D06).
 
 ## Estrutura
 
@@ -30,6 +41,8 @@ data/raw/            PDF original da BNCC (nunca editado)
 data/processed/      artefatos gerados (bncc_estruturada.json, estatísticas, comparação) — fora do git
 data/chroma/         base vetorial persistente — fora do git
 docs/                decisões e material para o artigo
+scripts/             verificações manuais (ex.: segurança via curl)
+supabase/migrations/ SQL do banco (tabela perfis + RLS + trigger)
 logs/                logs estruturados (JSON Lines) — fora do git
 src/educachat/
   config.py          configuração via .env (pydantic-settings)
@@ -39,7 +52,7 @@ src/educachat/
   ingestion/         Fases 2-3: embeddings + Chroma, estatísticas da base
   retrieval/         busca com filtro de metadata
   generation/        Fase 5: baseline, protótipo, prompts, cliente OpenRouter
-  api/               Fase 5.5: FastAPI
+  api/               Fase 5.5: FastAPI (main, seguranca, supabase)
 test_suite/          avaliação experimental
   modelos.py         ItemTeste, ConjuntoConsultas
   generator/         Fase 4: amostragem + estratégias (template / OpenRouter)
@@ -48,6 +61,12 @@ test_suite/          avaliação experimental
   resultados/        execuções e métricas (versionado)
   consultas.json     conjunto de teste (versionado)
 tests/               testes unitários (pytest)
+frontend/            Fase 9: Vue 3 + Vite + Pinia + Tailwind
+  src/views/         Login, Cadastro, Chat
+  src/stores/        auth (sessão em memória), chat
+  src/services/      api.ts (cliente HTTP único), redirect.ts
+  src/router/        rotas + guarda de autenticação
+  tests/             Vitest
 ```
 
 ## Setup
@@ -206,10 +225,57 @@ uv run python -m test_suite.metrics.cli                     # usa a execução m
 - Gera `metricas_{timestamp}.json` e `.md` ao lado dos resultados.
 - Definições das métricas e frases-gatilho: `docs/decisoes.md` (D21) e `test_suite/metrics/calculo.py`.
 
+## Fase 5.5: API
+
+Configuração do Supabase (uma vez):
+1. Crie um projeto em supabase.com. Em *Project Settings → API*, copie a URL e a `anon key`. Em *JWT Keys*, copie o JWT secret (se o projeto usar chaves assimétricas, deixe `SUPABASE_JWT_SECRET` vazio: a API usa o JWKS).
+2. No *SQL Editor*, rode `supabase/migrations/0001_perfis.sql`.
+3. Preencha `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET` no `.env`.
+
+```bash
+uv run uvicorn educachat.api.main:app --reload --port 8000     # http://127.0.0.1:8000/docs
+API=http://127.0.0.1:8000 EMAIL=... SENHA=... ./scripts/verificar_seguranca.sh
+```
+
+| Rota | Auth | Descrição |
+|---|---|---|
+| `POST /auth/cadastro` | pública | `{email, senha, ano}`; a série vai para o perfil via trigger |
+| `POST /auth/login` | pública | devolve o access token; o refresh token vai em cookie HttpOnly |
+| `POST /auth/refresh` | cookie | novo access token (rotaciona o refresh) |
+| `POST /auth/logout` | pública | apaga o cookie |
+| `GET /perfil` · `POST /perfil` | Bearer | lê o perfil / cria uma única vez (409 se já existe) |
+| `POST /chat` | Bearer | `{pergunta, modo?}`; a série vem do perfil; qualquer outro campo → 422 |
+
+O baseline não é exposto. `/interno/baseline` só existe com `EXPOR_ROTA_BASELINE=true`. Veja D23–D26.
+
+## Fase 9: front-end
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.development      # VITE_API_BASE_URL=http://localhost:8000
+npm run dev                           # http://localhost:5173
+npm test && npm run build             # testes, checagem de tipos e build
+```
+
+- O access token fica só em memória, e o refresh é feito por cookie HttpOnly via API. O front não usa o SDK do Supabase.
+- O `/chat` envia só a pergunta; a série vem do perfil no servidor.
+- Enquanto espera a resposta, o indicador mostra a etapa e os segundos decorridos.
+- Versões presas ao Node 22.11 (Vite 6, vue-router 4); com Node ≥ 22.12, dá para atualizar. Veja D27–D29.
+
+## Fase 10: integração local
+
+```bash
+./scripts/dev.sh     # API em http://localhost:8000 e front em http://localhost:5173
+```
+
+Use `localhost` nos dois, nunca `127.0.0.1`: o cookie de refresh é `SameSite=Strict`. O CORS libera só a origem do Vite (`CORS_ORIGINS`). Veja D30.
+
 ## Qualidade
 
 Rodar antes de qualquer commit. Os testes marcados `integracao` usam a base Chroma real e são pulados se ela não existir.
 
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+cd frontend && npm test && npm run build
 ```

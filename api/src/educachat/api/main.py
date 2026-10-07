@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from educachat.config import Settings, get_settings
@@ -208,16 +209,19 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
         gravar_cookie(resposta, sessao)
         return saida_sessao(sessao)
 
-    @app.post("/auth/refresh")
-    def refresh(request: Request, resposta: Response) -> SessaoSaida:
+    @app.post("/auth/refresh", response_model=SessaoSaida)
+    def refresh(request: Request, resposta: Response) -> SessaoSaida | JSONResponse:
         token = request.cookies.get(COOKIE_REFRESH)
         if not token:
             raise HTTPException(401, "sem sessão")
         try:
             sessao = servicos.auth.renovar(token)
-        except ErroAuth as exc:
-            resposta.delete_cookie(COOKIE_REFRESH, path="/auth")
-            raise HTTPException(401, "sessão expirada") from exc
+        except ErroAuth:
+            # Resposta explícita: com HTTPException o FastAPI descartaria o delete_cookie
+            # e um refresh token inválido ficaria no navegador.
+            negado = JSONResponse({"detail": "sessão expirada"}, status_code=401)
+            negado.delete_cookie(COOKIE_REFRESH, path="/auth")
+            return negado
         gravar_cookie(resposta, sessao)  # o Supabase rotaciona o refresh token
         return saida_sessao(sessao)
 
