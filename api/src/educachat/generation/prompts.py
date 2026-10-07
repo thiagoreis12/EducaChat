@@ -5,6 +5,8 @@ Baseline e protótipo usam o MESMO prompt de sistema e o MESMO enquadramento da 
 protótipo. Assim a comparação isola o efeito da recuperação (decisões D16 e D18).
 """
 
+from collections.abc import Sequence
+
 from educachat.generation.openrouter import Mensagem
 from educachat.retrieval.busca import HabilidadeRecuperada
 
@@ -55,12 +57,23 @@ def mensagens_baseline(pergunta: str, ano_aluno: int) -> list[Mensagem]:
 
 
 def mensagens_prototipo(
-    pergunta: str, ano_aluno: int, habilidades: list[HabilidadeRecuperada]
+    pergunta: str,
+    ano_aluno: int,
+    habilidades: list[HabilidadeRecuperada],
+    historico: Sequence[Mensagem] = (),
 ) -> list[Mensagem]:
+    """``historico`` (turnos anteriores, só na API) entra entre o sistema e a pergunta.
+
+    Vazio por padrão: o harness da Fase 6 gera exatamente as mesmas mensagens de antes.
+    """
     usuario = (
         f"{enquadramento(ano_aluno)}\n\n"
         f"{formatar_contexto(ano_aluno, habilidades)}\n\n"
         f"{INSTRUCAO_CONTEXTO}\n\n"
         f"Pergunta: {pergunta}"
     )
-    return [Mensagem(role="system", content=SISTEMA), Mensagem(role="user", content=usuario)]
+    return [
+        Mensagem(role="system", content=SISTEMA),
+        *historico,
+        Mensagem(role="user", content=usuario),
+    ]

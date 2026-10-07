@@ -91,7 +91,7 @@ Descrição de método:
 
 Descrição de método (código em `src/educachat/generation/`; decisões D16–D19):
 - **O que as duas condições compartilham:**
-  - o mesmo LLM (via OpenRouter);
+  - o mesmo LLM, Llama 3.3 70B Instruct (`meta-llama/llama-3.3-70b-instruct`, via OpenRouter);
   - os mesmos parâmetros (temperatura 0,3; máximo de 800 tokens);
   - o mesmo prompt de sistema;
   - a mesma informação sobre o aluno ("Sou aluno do Xº ano.").
@@ -127,11 +127,12 @@ Descrição (decisões D23–D26):
 - **Payload restrito:** o endpoint de conversa aceita apenas a pergunta; qualquer campo adicional (como `ano` ou `serie`) é rejeitado.
 - **Middleware:** a autenticação nega acesso por padrão a toda rota não declarada como pública.
 - **Tokens:** o access token é mantido apenas em memória no navegador, e o refresh token em cookie `HttpOnly` e `SameSite=Strict`, inacessível a scripts. Isso reduz o impacto de ataques XSS em relação ao armazenamento em `localStorage`, padrão do SDK do Supabase, ao custo de uma chamada de renovação a cada carregamento da página.
-- **Verificação:** 57 testes automatizados cobrem tokens ausentes, adulterados, expirados, de outra audiência, de outro emissor e sem assinatura (`alg: none`), além de payloads com campos de série, tentativa de troca de série e exposição do baseline. ⏳ O mesmo roteiro contra o Supabase real está em `scripts/verificar_seguranca.sh`; registrar aqui o resultado ao rodar.
+- **Verificação:** 57 testes automatizados cobrem tokens ausentes, adulterados, expirados, de outra audiência, de outro emissor e sem assinatura (`alg: none`), além de payloads com campos de série, tentativa de troca de série e exposição do baseline. O mesmo roteiro foi executado contra o Supabase e o LLM reais (`scripts/verificar_seguranca.sh`, aluno do 6º ano) e passou nas 9 verificações: requisições sem token ou com token adulterado foram rejeitadas (401); payloads com `ano`, `serie` ou `modo: baseline`, rejeitados (422); a troca de série, negada (409); a rota do baseline, oculta (404); e, para uma pergunta de conteúdo do 9º ano, a resposta manteve a série do aluno (6º ano) sem nenhuma habilidade de outra série.
 
 ## 9. Interface e avaliação de usabilidade
 
 - **Interface:** aplicação web em Vue 3, com cadastro (e-mail, senha e série), login e chat.
+- **Memória da conversa:** cada pergunta é enviada com as últimas três trocas da conversa, para que o assistente entenda perguntas de continuação. O histórico fica só no navegador, durante a sessão. A série e o filtro curricular não dependem dele: continuam vindo do perfil do aluno. A avaliação do Quadro 1 é feita em turno único, sem histórico.
 - **Sessão:**
   - o access token é mantido só em memória;
   - a sessão é renovada por cookie HttpOnly, sem expor o refresh token ao JavaScript;

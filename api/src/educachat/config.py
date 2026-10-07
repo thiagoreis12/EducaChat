@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     chroma_collection: str = "bncc_habilidades"
 
     openrouter_api_key: SecretStr | None = None
-    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
 
     # Geração (Fase 5). Mesmos parâmetros para baseline e protótipo.
     llm_temperatura: float = 0.3

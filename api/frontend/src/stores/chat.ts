@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { api, ErroApi, type Habilidade } from '../services/api'
+import { api, ErroApi, type Habilidade, type TurnoHistorico } from '../services/api'
 
 export interface Mensagem {
   id: number
@@ -10,6 +10,25 @@ export interface Mensagem {
   habilidades?: Habilidade[]
   tempoMs?: number
   erro?: boolean
+}
+
+/** Quantas mensagens anteriores vão junto com cada pergunta (limite da API: 6). */
+export const HISTORICO_MAX = 6
+
+/**
+ * Últimas trocas completas aluno → assistente, para o assistente lembrar da conversa.
+ * Trocas que terminaram em erro ficam de fora (a pergunta sem resposta não ajuda o modelo).
+ */
+export function montarHistorico(mensagens: Mensagem[]): TurnoHistorico[] {
+  const turnos: TurnoHistorico[] = []
+  for (let i = 0; i + 1 < mensagens.length; i++) {
+    const [pergunta, resposta] = [mensagens[i], mensagens[i + 1]]
+    if (pergunta.papel === 'aluno' && resposta.papel === 'assistente' && !resposta.erro) {
+      turnos.push({ papel: 'aluno', texto: pergunta.texto }, { papel: 'assistente', texto: resposta.texto })
+      i++
+    }
+  }
+  return turnos.slice(-HISTORICO_MAX)
 }
 
 function mensagemDeErro(e: unknown): string {
@@ -30,10 +49,11 @@ export const useChatStore = defineStore('chat', () => {
   async function enviar(pergunta: string): Promise<void> {
     const texto = pergunta.trim()
     if (!texto || carregando.value) return
+    const historico = montarHistorico(mensagens.value)
     mensagens.value.push({ id: proximoId++, papel: 'aluno', texto })
     carregando.value = true
     try {
-      const r = await api.chat(texto)
+      const r = await api.chat(texto, historico)
       mensagens.value.push({
         id: proximoId++,
         papel: 'assistente',

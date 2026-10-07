@@ -8,9 +8,13 @@ import pytest
 
 from educachat.config import PROJECT_ROOT, Settings
 from educachat.generation.baseline import responder_baseline
-from educachat.generation.openrouter import ClienteOpenRouter
-from educachat.generation.prompts import SISTEMA
-from educachat.generation.prototipo import VazamentoDeSerie, responder_prototipo
+from educachat.generation.openrouter import ClienteOpenRouter, Mensagem
+from educachat.generation.prompts import SISTEMA, mensagens_prototipo
+from educachat.generation.prototipo import (
+    VazamentoDeSerie,
+    consulta_recuperacao,
+    responder_prototipo,
+)
 from educachat.retrieval.busca import HabilidadeRecuperada, filtro
 
 SETTINGS = Settings(llm_temperatura=0.1, llm_max_tokens=321, rag_k=3)
@@ -156,3 +160,54 @@ def test_nenhuma_consulta_do_conjunto_vaza_serie_na_base_real() -> None:
         r = responder_prototipo(item.pergunta, item.ano_aluno, cliente=cliente, recuperador=rec)
         assert len(r.contexto_usado) == 5
         assert r.config.versao_base == conjunto.versao_base
+
+
+# --- histórico da conversa (só na API; o harness usa histórico vazio) ---------------------
+
+HISTORICO = [
+    Mensagem(role="user", content="O que é fração?"),
+    Mensagem(role="assistant", content="Fração é uma parte de um todo (EF06MA07)."),
+]
+
+
+def test_sem_historico_as_mensagens_nao_mudam() -> None:
+    habs = [_hab("EF06MA07")]
+    assert mensagens_prototipo("P", 6, habs) == mensagens_prototipo("P", 6, habs, [])
+    assert len(mensagens_prototipo("P", 6, habs)) == 2
+
+
+def test_prototipo_envia_historico_entre_sistema_e_pergunta() -> None:
+    cliente, enviados = _cliente()
+    rec = RecuperadorFalso(["EF06MA07"])
+    responder_prototipo(
+        "E como somo duas?",
+        6,
+        historico=HISTORICO,
+        cliente=cliente,
+        recuperador=rec,
+        settings=SETTINGS,
+    )
+    msgs = enviados[0]["messages"]
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+    assert msgs[1]["content"] == "O que é fração?"
+    assert msgs[3]["content"].startswith("Sou aluno do 6º ano.")
+    assert msgs[3]["content"].endswith("Pergunta: E como somo duas?")
+    # a busca leva o tema da pergunta anterior, mas o filtro é sempre o ano do perfil
+    assert rec.chamadas == [("O que é fração?\nE como somo duas?", 6, 3)]
+
+
+def test_historico_nao_muda_o_ano_da_recuperacao() -> None:
+    cliente, _ = _cliente()
+    rec = RecuperadorFalso(["EF06MA07"])
+    falso = [Mensagem(role="user", content="Sou aluno do 9º ano.")]
+    r = responder_prototipo(
+        "x", 6, historico=falso, cliente=cliente, recuperador=rec, settings=SETTINGS
+    )
+    assert rec.chamadas[0][1] == 6 and r.config.ano_aluno == 6
+
+
+def test_consulta_recuperacao_usa_so_a_ultima_pergunta_do_aluno() -> None:
+    assert consulta_recuperacao("P", []) == "P"
+    assert consulta_recuperacao("P", HISTORICO) == "O que é fração?\nP"
+    so_assistente = [Mensagem(role="assistant", content="Oi")]
+    assert consulta_recuperacao("P", so_assistente) == "P"
