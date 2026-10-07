@@ -1,7 +1,7 @@
 # Artigo extensionista — EducaChat
 
 Projeto multidisciplinar ETEP 2026.2  
-Equipe: Thiago Reis (Análise e Desenvolvimento de Sistemas) e Marcus Paulo Pereira de Oliveira (Ciência da Computação)
+Equipe: Thiago Marcelino dos Reis (Análise e Desenvolvimento de Sistemas) e Marcus Paulo Pereira de Oliveira (Ciência da Computação)
 
 ## Entregas
 
