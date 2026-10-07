@@ -26,24 +26,36 @@ class TokenInvalido(Exception):
 
 
 class VerificadorJWT:
-    """Aceita HS256 (JWT secret do projeto) ou chaves assimétricas via JWKS."""
+    """Valida tokens do Supabase Auth assinados de qualquer um dos dois jeitos:
+
+    * HS256 com o JWT secret do projeto (projetos legados), se ``jwt_secret`` for dado;
+    * ES256/RS256 com as chaves públicas do JWKS do projeto (padrão em projetos novos).
+
+    O caminho é escolhido pelo ``alg`` do cabeçalho, mas cada caminho só aceita os seus
+    algoritmos, então não há confusão de algoritmo (um token HS256 nunca é verificado com
+    chave pública, e ``alg: none`` é sempre rejeitado).
+    """
+
+    ASSIMETRICOS = ("ES256", "RS256")
 
     def __init__(self, supabase_url: str, jwt_secret: str | None = None) -> None:
         self.emissor = supabase_url.rstrip("/") + "/auth/v1"
         self.secret = jwt_secret
-        self._jwks = (
-            None if jwt_secret else jwt.PyJWKClient(self.emissor + "/.well-known/jwks.json")
-        )
+        self._jwks = jwt.PyJWKClient(self.emissor + "/.well-known/jwks.json", cache_keys=True)
 
     def verificar(self, token: str) -> UsuarioAutenticado:
         try:
-            if self.secret:
+            alg = jwt.get_unverified_header(token).get("alg")
+            if alg == "HS256":
+                if not self.secret:
+                    raise TokenInvalido("token HS256, mas SUPABASE_JWT_SECRET não configurado")
                 chave: object = self.secret
                 algoritmos = ["HS256"]
-            else:
-                assert self._jwks is not None
+            elif alg in self.ASSIMETRICOS:
                 chave = self._jwks.get_signing_key_from_jwt(token).key
-                algoritmos = ["ES256", "RS256"]
+                algoritmos = list(self.ASSIMETRICOS)
+            else:
+                raise TokenInvalido(f"algoritmo não aceito: {alg!r}")
             dados = jwt.decode(
                 token,
                 chave,  # type: ignore[arg-type]

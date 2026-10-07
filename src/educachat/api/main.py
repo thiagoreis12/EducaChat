@@ -4,7 +4,7 @@ Rodar: ``uv run uvicorn educachat.api.main:app --reload`` (ou ``educachat-api``)
 
 Regra central de segurança: a série usada no /chat é SEMPRE lida do perfil do usuário
 autenticado (tabela ``perfis``, via token). O corpo do /chat só aceita
-``{pergunta, modo}``; qualquer campo extra (``ano``, ``serie``...) é rejeitado com 422.
+``{pergunta, modo, historico}``; qualquer campo extra (``ano``, ``serie``...) é rejeitado com 422.
 """
 
 import contextlib
@@ -21,13 +21,14 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from educachat.config import Settings, get_settings
 from educachat.generation.baseline import responder_baseline
 from educachat.generation.modelos import Resposta
-from educachat.generation.openrouter import ErroOpenRouter, TentativasEsgotadas
+from educachat.generation.openrouter import ErroOpenRouter, Mensagem, TentativasEsgotadas
 from educachat.generation.prototipo import VazamentoDeSerie, responder_prototipo
 from educachat.models import rotulo_serie
 
 from .seguranca import AutenticacaoMiddleware, UsuarioAutenticado, VerificadorJWT
 from .supabase import (
     ErroAuth,
+    ErroPerfis,
     PerfilJaExiste,
     ProvedorAuth,
     RepositorioPerfis,
@@ -39,7 +40,9 @@ from .supabase import (
 logger = logging.getLogger(__name__)
 
 COOKIE_REFRESH = "educachat_refresh"
-Responder = Callable[[str, int], Resposta]
+# pergunta, ano (do perfil), histórico da conversa
+Responder = Callable[[str, int, list[Mensagem]], Resposta]
+HISTORICO_MAX = 6  # mensagens anteriores aceitas no /chat (3 trocas aluno/assistente)
 
 
 @dataclass
@@ -73,8 +76,17 @@ class PerfilEntrada(Estrito):
     ano: int = Field(ge=6, le=9)
 
 
+class TurnoHistorico(Estrito):
+    papel: Literal["aluno", "assistente"]
+    texto: str = Field(min_length=1, max_length=4000)
+
+
 class ChatEntrada(Estrito):
     pergunta: str = Field(min_length=1, max_length=2000)
+    # Turnos anteriores, mantidos pelo front. Não são confiáveis (o cliente pode escrever
+    # qualquer coisa), mas só valem para a própria conversa: a série e o filtro da
+    # recuperação continuam vindo do perfil.
+    historico: list[TurnoHistorico] = Field(default_factory=list, max_length=HISTORICO_MAX)
     # O baseline nunca é exposto ao usuário final: o único modo aceito é o protótipo.
     modo: Literal["prototipo"] = "prototipo"
 
@@ -130,8 +142,8 @@ def servicos_padrao(settings: Settings) -> Servicos:
         auth=SupabaseAuth(settings.supabase_url, anon),
         perfis=SupabasePerfis(settings.supabase_url, anon),
         verificador=VerificadorJWT(settings.supabase_url, secret),
-        responder=lambda p, a: responder_prototipo(p, a, settings=settings),
-        responder_baseline=lambda p, a: responder_baseline(p, a, settings=settings),
+        responder=lambda p, a, h: responder_prototipo(p, a, historico=h, settings=settings),
+        responder_baseline=lambda p, a, h: responder_baseline(p, a, settings=settings),
     )
 
 
@@ -139,6 +151,13 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="EducaChat API", version="0.1.0")
     app.state.servicos = servicos
+
+    @app.exception_handler(ErroPerfis)
+    def perfis_indisponivel(request: Request, exc: ErroPerfis) -> JSONResponse:
+        # Sem a série não há como responder com segurança: falha fechada, mas com um
+        # erro claro em vez de 500 (ex.: migration não aplicada, Supabase fora do ar).
+        logger.error("perfis_indisponivel: %s", exc)
+        return JSONResponse({"detail": "perfil_indisponivel"}, status_code=503)
 
     # Ordem importa: o último middleware adicionado é o mais externo. O CORS precisa
     # envolver a autenticação para responder ao preflight (OPTIONS) e anexar os cabeçalhos
@@ -251,9 +270,11 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "perfil já existe; a série não pode ser alterada") from exc
         return Perfil(ano=entrada.ano, serie=rotulo_serie(entrada.ano, entrada.ano))
 
-    def _responder(responder: Responder, pergunta: str, ano: int) -> Resposta:
+    def _responder(
+        responder: Responder, pergunta: str, ano: int, historico: list[Mensagem]
+    ) -> Resposta:
         try:
-            return responder(pergunta, ano)
+            return responder(pergunta, ano, historico)
         except TentativasEsgotadas as exc:
             raise HTTPException(503, "assistente ocupado, tente de novo em instantes") from exc
         except ErroOpenRouter as exc:
@@ -272,7 +293,11 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
     @app.post("/chat")
     def chat(entrada: ChatEntrada, u: Usuario) -> ChatSaida:
         ano = ano_do_perfil(u)  # ÚNICA fonte da série
-        r = _responder(servicos.responder, entrada.pergunta, ano)
+        historico = [
+            Mensagem(role="user" if t.papel == "aluno" else "assistant", content=t.texto)
+            for t in entrada.historico
+        ]
+        r = _responder(servicos.responder, entrada.pergunta, ano, historico)
         return ChatSaida(
             resposta=r.texto,
             serie=rotulo_serie(ano, ano),
@@ -288,7 +313,8 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
         @app.post("/interno/baseline")
         def baseline(entrada: ChatEntrada, u: Usuario) -> ChatSaida:
             ano = ano_do_perfil(u)
-            r = _responder(servicos.responder_baseline, entrada.pergunta, ano)
+            # Sem histórico: a rota existe só para comparar com o harness (turno único).
+            r = _responder(servicos.responder_baseline, entrada.pergunta, ano, [])
             return ChatSaida(
                 resposta=r.texto, serie=rotulo_serie(ano, ano), habilidades=[], tempo_ms=r.tempo_ms
             )

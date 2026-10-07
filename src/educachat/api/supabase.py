@@ -23,6 +23,13 @@ class PerfilJaExiste(Exception):
     pass
 
 
+class ErroPerfis(Exception):
+    """Falha ao acessar ``perfis`` (tabela ausente, Supabase fora do ar, timeout...).
+
+    Diferente de "perfil não existe", que é ``obter_ano`` devolvendo ``None``.
+    """
+
+
 class Sessao(BaseModel):
     access_token: str
     refresh_token: str
@@ -61,7 +68,12 @@ class SupabaseAuth:
         self.http = http or httpx.Client(timeout=15)
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
-        return {"apikey": self.anon_key, "Authorization": f"Bearer {token or self.anon_key}"}
+        # As chaves novas do Supabase (sb_publishable_...) não são JWT e não podem ir em
+        # Authorization; o cabeçalho apikey basta e também funciona com a anon key legada.
+        cabecalhos = {"apikey": self.anon_key}
+        if token:
+            cabecalhos["Authorization"] = f"Bearer {token}"
+        return cabecalhos
 
     def _sessao(self, dados: dict[str, Any]) -> Sessao:
         usuario = dados.get("user") or {}
@@ -109,21 +121,28 @@ class SupabasePerfis:
         return {"apikey": self.anon_key, "Authorization": f"Bearer {token}"}
 
     def obter_ano(self, user_id: str, token: str) -> int | None:
-        r = self.http.get(
-            self.base,
-            params={"user_id": f"eq.{user_id}", "select": "ano"},
-            headers=self._headers(token),
-        )
-        r.raise_for_status()
-        linhas = r.json()
+        try:
+            r = self.http.get(
+                self.base,
+                params={"user_id": f"eq.{user_id}", "select": "ano"},
+                headers=self._headers(token),
+            )
+            r.raise_for_status()
+            linhas = r.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ErroPerfis(str(exc)) from exc
         return int(linhas[0]["ano"]) if linhas else None
 
     def criar(self, user_id: str, ano: int, token: str) -> None:
-        r = self.http.post(
-            self.base,
-            json={"user_id": user_id, "ano": ano},
-            headers={**self._headers(token), "Prefer": "return=minimal"},
-        )
+        try:
+            r = self.http.post(
+                self.base,
+                json={"user_id": user_id, "ano": ano},
+                headers={**self._headers(token), "Prefer": "return=minimal"},
+            )
+        except httpx.HTTPError as exc:
+            raise ErroPerfis(str(exc)) from exc
         if r.status_code == 409:
             raise PerfilJaExiste(user_id)
-        r.raise_for_status()
+        if r.is_error:
+            raise ErroPerfis(f"HTTP {r.status_code}: {_mensagem(r)}")

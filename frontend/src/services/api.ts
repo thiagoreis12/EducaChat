@@ -47,6 +47,12 @@ export interface Habilidade {
   texto: string
 }
 
+/** Turno anterior da conversa, enviado no /chat para o assistente manter o contexto. */
+export interface TurnoHistorico {
+  papel: 'aluno' | 'assistente'
+  texto: string
+}
+
 export interface RespostaChat {
   resposta: string
   serie: string
@@ -129,6 +135,10 @@ export const api = {
   criarPerfil: (ano: number) =>
     requisitar<Perfil>('/perfil', { metodo: 'POST', corpo: { ano }, autenticado: true }),
   // A série NÃO é enviada: a API a lê do perfil a partir do token.
-  chat: (pergunta: string) =>
-    requisitar<RespostaChat>('/chat', { metodo: 'POST', corpo: { pergunta }, autenticado: true }),
+  chat: (pergunta: string, historico: TurnoHistorico[] = []) =>
+    requisitar<RespostaChat>('/chat', {
+      metodo: 'POST',
+      corpo: historico.length ? { pergunta, historico } : { pergunta },
+      autenticado: true,
+    }),
 }

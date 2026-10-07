@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections.abc import Sequence
 from functools import lru_cache
 from typing import Protocol
 
@@ -9,7 +10,7 @@ from chromadb.api.models.Collection import Collection
 
 from educachat.config import Settings, get_settings
 from educachat.generation.modelos import ConfigGeracao, Resposta
-from educachat.generation.openrouter import ClienteOpenRouter
+from educachat.generation.openrouter import ClienteOpenRouter, Mensagem
 from educachat.generation.prompts import VERSAO_PROMPT, mensagens_prototipo
 from educachat.generation.validacao import validar_ano
 from educachat.retrieval.busca import HabilidadeRecuperada, abrir_colecao, buscar, filtro
@@ -53,10 +54,22 @@ def _valida_no_ano(codigo: str, ano: int) -> bool:
     return inicio <= ano <= fim
 
 
+def consulta_recuperacao(pergunta: str, historico: Sequence[Mensagem]) -> str:
+    """Texto usado na busca: a pergunta, precedida da pergunta anterior do aluno, se houver.
+
+    Perguntas de continuação ("e como resolve isso?") sozinhas não dizem o assunto; a
+    pergunta anterior traz o tema para a busca. As respostas do assistente ficam de fora,
+    porque são longas e diluiriam o embedding.
+    """
+    anteriores = [m.content for m in historico if m.role == "user"]
+    return f"{anteriores[-1]}\n{pergunta}" if anteriores else pergunta
+
+
 def responder_prototipo(
     pergunta: str,
     ano_aluno: int,
     *,
+    historico: Sequence[Mensagem] = (),
     cliente: ClienteOpenRouter | None = None,
     recuperador: Recuperador | None = None,
     settings: Settings | None = None,
@@ -64,6 +77,8 @@ def responder_prototipo(
     """Responde ancorado nas habilidades da BNCC válidas para ``ano_aluno``.
 
     ``ano_aluno`` deve vir do perfil autenticado, nunca do corpo da requisição (Fase 5.5).
+    ``historico`` são os turnos anteriores da conversa; só muda o que o LLM vê, nunca o
+    filtro de série da recuperação.
     """
     settings = settings or get_settings()
     validar_ano(ano_aluno, settings)
@@ -71,7 +86,7 @@ def responder_prototipo(
     recuperador = recuperador or recuperador_padrao()
 
     inicio = time.perf_counter()
-    contexto = recuperador(pergunta, ano_aluno, settings.rag_k)
+    contexto = recuperador(consulta_recuperacao(pergunta, historico), ano_aluno, settings.rag_k)
     tempo_recuperacao_ms = round((time.perf_counter() - inicio) * 1000, 1)
 
     # Defesa em profundidade: o filtro do Chroma já garante isso; se falhar, não
@@ -82,7 +97,7 @@ def responder_prototipo(
         raise VazamentoDeSerie(f"recuperação devolveu {fora} para o {ano_aluno}º ano")
 
     llm = cliente.completar(
-        mensagens_prototipo(pergunta, ano_aluno, contexto),
+        mensagens_prototipo(pergunta, ano_aluno, contexto, historico),
         temperatura=settings.llm_temperatura,
         max_tokens=settings.llm_max_tokens,
     )

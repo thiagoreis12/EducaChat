@@ -263,10 +263,11 @@ Status: ✅ vigente · ⏳ pendente · ♻️ substituída
 ### D23 ✅ Autenticação delegada ao Supabase Auth
 - `POST /auth/cadastro`, `/auth/login`, `/auth/refresh` e `/auth/logout` repassam ao Supabase Auth (GoTrue) via HTTP. **A API nunca vê nem guarda hash de senha.**
 - **JWT:** validado com PyJWT, conferindo:
-  - assinatura (HS256 com `SUPABASE_JWT_SECRET`, ou ES256/RS256 via JWKS do projeto se o secret não for informado);
+  - assinatura, pelo `alg` do token: ES256/RS256 com as chaves públicas do JWKS do projeto (padrão em projetos novos), ou HS256 com `SUPABASE_JWT_SECRET` (projetos legados). Cada caminho só aceita os próprios algoritmos, então não há confusão de algoritmo;
   - `exp`, `aud = authenticated`, `iss = {SUPABASE_URL}/auth/v1` e `role = authenticated`;
   - tokens com `alg: none` são rejeitados.
 - **Middleware que nega por padrão:** toda rota fora de uma lista pública (`/health`, rotas de auth, `/docs`) exige Bearer válido, **inclusive rotas que ainda não existem**. Uma rota nova já nasce protegida.
+- **Chaves novas do Supabase:** a chave pública nova (`sb_publishable_...`) não é JWT; ela vai só no cabeçalho `apikey`, nunca em `Authorization`. O mesmo vale para a anon key legada.
 - **Onde:** `src/educachat/api/seguranca.py`, `src/educachat/api/supabase.py`.
 
 ### D24 ✅ A série vem só do perfil no banco
@@ -366,9 +367,23 @@ Status: ✅ vigente · ⏳ pendente · ♻️ substituída
 - **SUS:** com a integração, a avaliação SUS pode ser aplicada sobre o produto real (front + API), e não sobre a interface de testes da API. Isso resolve a limitação registrada na seção 3.1.
 - ⏳ **Critério de pronto manual** (depende de Supabase + OpenRouter configurados): cadastro com série → login → pergunta no chat → resposta com habilidades na tela; recarregar a página sem perder a sessão; sair.
 
+### D31 ✅ Modelo pago no OpenRouter e verificação real da API
+- **Modelo:** `meta-llama/llama-3.3-70b-instruct`. A variante `:free` deixou de existir no OpenRouter (HTTP 404, "unavailable for free"), e o `/chat` respondia 502. Trocado o padrão em `config.py` e no `.env.example`. Mesmo modelo, só muda a cobrança; nenhuma execução real da Fase 6 tinha sido feita com a variante `:free`, então os resultados não mudam de condição.
+- **`SUPABASE_URL`:** deve ser só `https://<projeto>.supabase.co`, sem `/rest/v1/`; a API acrescenta `/auth/v1` e `/rest/v1` sozinha.
+- **Verificação real (2026-10-06):** cadastro (6º ano, perfil criado pelo trigger), login, `/perfil`, refresh por cookie e logout funcionaram contra o Supabase real; `scripts/verificar_seguranca.sh` passou 9/9.
+- **Falha ao ler `perfis` vira 503, não 500:** usuário sem linha em `perfis` já era tratado (`perfil: null`, `/perfil` 404, `/chat` 409). O 500 visto no teste real vinha da *tabela* ausente (migration não aplicada; PostgREST responde 404 `PGRST205`), e qualquer falha do PostgREST ou de rede escapava como exceção. Agora `SupabasePerfis` converte essas falhas em `ErroPerfis`, e a API responde `503 perfil_indisponivel` (falha fechada: sem série, sem resposta) e registra o motivo no log. Testes em `tests/test_api.py`.
+
+### D32 ✅ Histórico curto da conversa no chat
+- **Problema:** cada pergunta ia sozinha para o LLM, então o assistente esquecia a mensagem anterior ("e como somo duas delas?" não tinha a que se referir).
+- **Onde fica:** no front (store do chat, em memória), e não no banco. Combina com a sessão sem estado no servidor (D28), não pede nova migration e some ao sair ou recarregar.
+- **Quanto:** as últimas 6 mensagens (3 trocas aluno → assistente completas; trocas que terminaram em erro ficam de fora). A API rejeita mais que 6, papel diferente de `aluno`/`assistente`, campos extras e textos acima de 4000 caracteres (422).
+- **Segurança:** o histórico vem do cliente e não é confiável, mas só afeta a conversa do próprio aluno, como a pergunta. A série continua vindo só do perfil, o filtro da recuperação usa esse ano, a salvaguarda de vazamento roda igual e o enquadramento "Sou aluno do Xº ano." vai na mensagem atual. Testado com histórico que diz "Sou do 9º ano": a busca e a resposta continuam no 6º.
+- **Recuperação:** a busca usa a pergunta atual precedida da pergunta anterior do aluno (`consulta_recuperacao`), para que perguntas de continuação tragam o tema. As respostas do assistente não entram na busca (longas, diluiriam o embedding).
+- **Experimento intacto:** histórico vazio por padrão; o harness (Fase 6), o baseline e o Quadro 1 continuam em turno único, com as mesmas mensagens de antes (teste `test_sem_historico_as_mensagens_nao_mudam`). A rota `/interno/baseline` ignora o histórico.
+- **Verificado (2026-10-06):** duas perguntas encadeadas contra a API real; a segunda ("E como eu somo duas delas?") foi respondida sobre frações, com habilidades só do 6º ano. `scripts/verificar_seguranca.sh` continua 9/9.
+
 ## Pendentes (dependem do autor)
 
-- ⏳ **Chaves e Supabase:** criar `.env` com `OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET`, e aplicar `supabase/migrations/0001_perfis.sql`.
 - ⏳ **Conferência da amostra da Fase 1** (D06): registrar o resultado.
 - ⏳ **Métricas** (D21): conferir as definições contra as do artigo.
-- ⏳ **Execuções reais:** harness (Fase 6), `scripts/verificar_seguranca.sh` (Fase 5.5) e o fluxo manual da Fase 10.
+- ⏳ **Execuções reais:** harness (Fase 6) e o fluxo manual da Fase 10.

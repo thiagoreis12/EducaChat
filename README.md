@@ -17,22 +17,37 @@ Assistente pedagógico ancorado na BNCC. Usa RAG com filtro de metadados por sé
 | 2: ingestão | ✅ | 730 docs no Chroma; filtro por ano verificado (`tests/test_retrieval.py`) |
 | 3: estatísticas | ✅ | `data/processed/estatisticas_base.json` |
 | 4: consultas | ✅ | `test_suite/consultas.json` (151 itens, reprodutível) |
-| 5: baseline × protótipo | ✅ código / ⏳ execução real | testes com LLM simulado + 151 consultas na base real sem vazamento; falta `OPENROUTER_API_KEY` para chamadas reais |
-| 6: harness | ✅ código / ⏳ execução real | resumível, testado com LLM simulado; falta `OPENROUTER_API_KEY` |
+| 5: baseline × protótipo | ✅ código / ⏳ execução real | testes com LLM simulado + 151 consultas na base real sem vazamento; chave do OpenRouter configurada, falta a execução real |
+| 6: harness | ✅ código / ⏳ execução real | resumível, testado com LLM simulado; falta rodar com o LLM real |
 | 7: métricas | ✅ | Quadro 1 testado com dados sintéticos; ⚠️ conferir definições com o artigo (D21) |
 | 8: testes | ✅ | escritos junto de cada fase (D22) |
-| 5.5: API | ✅ código / ⏳ Supabase real | 57 testes de segurança (JWT real, Supabase simulado); falta aplicar o SQL e rodar `scripts/verificar_seguranca.sh` |
-| 9: front-end | ✅ | Vue 3 + Pinia + Tailwind; 18 testes (Vitest), `vue-tsc` e build OK |
-| 10: integração | ✅ código / ⏳ fluxo manual | CORS + cookie configurados, `scripts/dev.sh`; falta o teste manual com Supabase + OpenRouter reais |
+| 5.5: API | ✅ | testes de segurança (JWT real, Supabase simulado) + `scripts/verificar_seguranca.sh` 9/9 contra o Supabase e o OpenRouter reais (2026-10-06) |
+| 9: front-end | ✅ | Vue 3 + Pinia + Tailwind; 21 testes (Vitest), `vue-tsc` e build OK |
+| 10: integração | ✅ código / ⏳ fluxo manual | CORS + cookie configurados, `scripts/dev.sh`; falta o teste manual (ver TODO) |
 
-### O que só você pode fazer
+## TODO
 
-1. Criar o `.env` (a partir de `.env.example`) com `OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET`.
-2. No Supabase, rodar `supabase/migrations/0001_perfis.sql` no SQL Editor.
-3. Rodar `./scripts/dev.sh` e fazer o fluxo manual: cadastro com série → login → pergunta → resposta com habilidades → recarregar a página → sair.
-4. Rodar `scripts/verificar_seguranca.sh` com um aluno do 6º ano.
-5. Rodar o harness (Fase 6) e as métricas (Fase 7).
-6. Conferir as definições das métricas contra as do artigo (D21) e registrar a conferência da amostra da Fase 1 (D06).
+Tarefas que dependem do autor. Marque `[x]` ao concluir.
+
+### Configuração
+- [x] Criar o `.env` a partir de `.env.example` e preencher `OPENROUTER_API_KEY`.
+- [x] **Supabase:**
+  - [x] Criar o projeto em supabase.com.
+  - [x] Em *Project Settings → API Keys*, copiar a **URL do projeto** (`https://xxxx.supabase.co`) e a **chave pública** (`sb_publishable_...` em projetos novos, ou `anon` em projetos antigos).
+  - [x] Em *Authentication → Sign In / Providers → Email*, desligar **Confirm email**, para testar sem precisar clicar no link de confirmação.
+  - [x] No *SQL Editor*, colar e rodar `supabase/migrations/0001_perfis.sql`.
+  - [x] No `.env`, preencher `SUPABASE_URL` e `SUPABASE_ANON_KEY` (a chave pública). `SUPABASE_JWT_SECRET` **só** se o projeto ainda usar o *legacy JWT secret*; projetos novos não precisam.
+
+### Verificações com os serviços reais
+- [ ] Rodar `./scripts/dev.sh` e abrir **http://localhost:5173** (use `localhost`, não `127.0.0.1`, senão o login não se mantém).
+- [ ] Fluxo manual da Fase 10: cadastro com série → login → pergunta → resposta com habilidades na tela → recarregar a página (continua logado) → sair.
+- [x] Rodar `scripts/verificar_seguranca.sh` com um aluno do 6º ano e registrar o resultado em `docs/artigo.md` (seção 8).
+- [ ] Rodar o harness (Fase 6) e depois as métricas (Fase 7); copiar o Quadro 1 para `docs/artigo.md` (seção 7).
+
+### Revisões para o artigo
+- [ ] Conferir as definições das métricas (D21) contra as do artigo.
+- [ ] Conferir a amostra de 20 habilidades da Fase 1 (`data/processed/amostra_fase1/`) e registrar o resultado em D06.
+- [ ] Aplicar a avaliação SUS sobre o produto integrado e registrar em `docs/artigo.md` (seção 9).
 
 ## Estrutura
 
@@ -228,9 +243,12 @@ uv run python -m test_suite.metrics.cli                     # usa a execução m
 ## Fase 5.5: API
 
 Configuração do Supabase (uma vez):
-1. Crie um projeto em supabase.com. Em *Project Settings → API*, copie a URL e a `anon key`. Em *JWT Keys*, copie o JWT secret (se o projeto usar chaves assimétricas, deixe `SUPABASE_JWT_SECRET` vazio: a API usa o JWKS).
-2. No *SQL Editor*, rode `supabase/migrations/0001_perfis.sql`.
-3. Preencha `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_JWT_SECRET` no `.env`.
+1. Crie um projeto em supabase.com.
+2. Em *Project Settings → API Keys*, copie a **URL do projeto** e a **chave pública**: `sb_publishable_...`, ou a `anon` legada.
+3. `SUPABASE_JWT_SECRET` só é necessário se o projeto ainda assina tokens com o *legacy JWT secret* (HS256). Projetos novos usam chaves assimétricas, e a API as busca sozinha no JWKS; nesse caso, deixe vazio.
+4. Em *Authentication → Sign In / Providers → Email*, desligue **Confirm email** para testar localmente. Se deixar ligado, o cadastro pede confirmação por e-mail antes do login.
+5. No *SQL Editor*, rode `supabase/migrations/0001_perfis.sql`.
+6. No `.env`, preencha `SUPABASE_URL`, `SUPABASE_ANON_KEY` (a chave pública) e, se precisar, `SUPABASE_JWT_SECRET`.
 
 ```bash
 uv run uvicorn educachat.api.main:app --reload --port 8000     # http://127.0.0.1:8000/docs
@@ -244,7 +262,7 @@ API=http://127.0.0.1:8000 EMAIL=... SENHA=... ./scripts/verificar_seguranca.sh
 | `POST /auth/refresh` | cookie | novo access token (rotaciona o refresh) |
 | `POST /auth/logout` | pública | apaga o cookie |
 | `GET /perfil` · `POST /perfil` | Bearer | lê o perfil / cria uma única vez (409 se já existe) |
-| `POST /chat` | Bearer | `{pergunta, modo?}`; a série vem do perfil; qualquer outro campo → 422 |
+| `POST /chat` | Bearer | `{pergunta, modo?, historico?}`; `historico` = até 6 turnos `{papel: aluno\|assistente, texto}`; a série vem do perfil; qualquer outro campo → 422 |
 
 O baseline não é exposto. `/interno/baseline` só existe com `EXPOR_ROTA_BASELINE=true`. Veja D23–D26.
 
