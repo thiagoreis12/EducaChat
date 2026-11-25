@@ -278,7 +278,7 @@ def criar_app(servicos: Servicos, settings: Settings | None = None) -> FastAPI:
         except TentativasEsgotadas as exc:
             raise HTTPException(503, "assistente ocupado, tente de novo em instantes") from exc
         except ErroOpenRouter as exc:
-            logger.exception("erro_llm")
+            logger.exception("erro_llm: %s", exc)
             raise HTTPException(502, "falha ao consultar o modelo de linguagem") from exc
         except VazamentoDeSerie as exc:
             logger.exception("vazamento_bloqueado")

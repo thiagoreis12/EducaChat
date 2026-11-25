@@ -147,6 +147,9 @@ class ClienteOpenRouter:
             "model": modelo or self.modelo,
             "messages": [m.model_dump() for m in mensagens],
             "temperature": temperatura,
+            # Modelos com "reasoning" (ex.: Nemotron) gastam tokens pensando.
+            # effort=low deixa margem para o texto final da resposta.
+            "reasoning": {"effort": "low"},
         }
         if max_tokens is not None:
             corpo["max_tokens"] = max_tokens
@@ -175,8 +178,25 @@ class ClienteOpenRouter:
                 continue
 
             uso = dados.get("usage") or {}
+            mensagem = dados["choices"][0].get("message") or {}
+            texto = (mensagem.get("content") or "").strip()
+            # Sem texto útil: o modelo provavelmente esgotou max_tokens no raciocínio.
+            if not texto:
+                if tentativa == self.max_tentativas:
+                    raise ErroOpenRouter(
+                        "modelo devolveu resposta vazia (possível esgotamento de tokens no reasoning)"
+                    )
+                logger.warning(
+                    "openrouter_resposta_vazia",
+                    extra={"tentativa": tentativa, "usage": uso},
+                )
+                # Na próxima tentativa, dobra o teto (até 4000) para sobrar tokens à resposta.
+                atual = int(corpo.get("max_tokens") or 800)
+                corpo["max_tokens"] = min(4000, max(atual * 2, 1600))
+                continue
+
             return RespostaLLM(
-                texto=(dados["choices"][0]["message"].get("content") or "").strip(),
+                texto=texto,
                 modelo=str(dados.get("model", corpo["model"])),
                 tempo_ms=round((time.perf_counter() - inicio) * 1000, 1),
                 tentativas=tentativa,
